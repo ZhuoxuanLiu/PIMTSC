@@ -1,0 +1,33 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--backbone", "resnetv2_50_bit", 
+                "--dataset", "FordB", 
+                "--scale",
+                "--method", "conv2d", 
+                "--proj_size", "256", 
+                "--update_in_test",
+                "--batch_size", "32",
+                // "--use_contrasive",
+                "--train_backbone", 
+                // "--resume_train_backbone",
+                "--test_backbone", 
+                "--train_model", 
+                "--test_model", 
+                "--plot_tSNE",
+                "--tSNE_perplexity", "20",
+            ],
+        }
+    ]
+}
