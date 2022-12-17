@@ -98,41 +98,35 @@ class MappingLayer(nn.Module):
     
 
 class ProjectionLayer(nn.Module):
-    def __init__(self, proj_method, d_features):
+    def __init__(self, proj_method, d_features, n_mels, pr_model):
         super().__init__()
         self.proj_method = proj_method
         self.d_features = d_features
-        self.build = False
-    
-    def _build(self, x):
-        B, C, T, F = x.shape
-        # [batch_size, channels, ceil(frames//32), ceil(nmels//32)]
+        F = math.ceil(n_mels//32)
         if self.proj_method == 'linear':  
             # avg_pool-> [batch_size, channels] -> [batch_size, d_features]
-            self.proj = nn.Linear(C, self.d_features).to(x.device)
+            self.proj = nn.Linear(cf.output_channel[pr_model], self.d_features)
         elif self.proj_method == 'conv':
-            # proj-> [batch_size, d_features, ceil(frames//32), 1] -> [batch_size, d_features]
+            # proj-> [batch_size, d_features, 1, ceil(frames//32)] -> [batch_size, d_features]
             self.proj = nn.Conv2d(
-                in_channels = C,
+                in_channels = cf.output_channel[pr_model],
                 out_channels = self.d_features,
-                kernel_size = (3,F),
+                kernel_size = (F,3),
                 padding = (1,0)
-                ).to(x.device)
+                )
         elif self.proj_method == 'attn':
             # avg_pool-> [batch_size, channels, ceil(frames//32)] -> [batch_size, d_features]
-            self.proj = AttentionLayer(C, C, self.d_features).to(x.device)
-        self.build = True
+            self.proj = AttentionLayer(cf.output_channel[pr_model], cf.output_channel[pr_model], self.d_features)
+    
         
     def forward(self, x):
         B, C, T, F = x.shape
-        if not self.build:
-            self._build(x)
         if self.proj_method == 'linear':
             out = torch.flatten(out, 2)
             out = torch.mean(out, dim=-1)
             out = self.proj(out)
         elif self.proj_method == 'conv':
-            out = torch.flatten(self.proj(out), 2)
+            out = torch.flatten(self.proj(x), 2)
             out = torch.mean(out, dim=-1)
         elif self.proj_method == 'attn':
             out = out.reshape(B, -1, F)
@@ -150,7 +144,7 @@ class MyModel(nn.Module):
         self.padding_layer = SegZeroPadding1D(args.seg_num)
         self.ART_layer = ARTLayer(args.drop_rate)
         self.pr_model = ImageModel(args.pr_model, args, load=False)
-        self.proj_layer = ProjectionLayer(args.proj_method, args.d_features)
+        self.proj_layer = ProjectionLayer(args.proj_method, args.d_features, args.n_mels, args.pr_model)
         self._pr_adjust()
         self.pretrained_path = args.pretrained_path
         if load:
@@ -211,7 +205,7 @@ class ImageModel(nn.Module):
         super().__init__()
         self.acoustic_layer = AcousticLayer(args)
         self.model = eval(cf.create_model[model])
-        self.proj_layer = ProjectionLayer(args.proj_method, args.d_features)
+        self.proj_layer = ProjectionLayer(args.proj_method, args.d_features, args.n_mels, args.pr_model)
         self.model.global_pool = nn.Identity()
         self.model.classifier = nn.Identity()
         self.args = args
