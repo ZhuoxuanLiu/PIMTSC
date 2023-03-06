@@ -18,17 +18,17 @@ def main():
 
     # basic config
     parser.add_argument('--train_backbone', action='store_true', default=False, help='train backbone')
-    parser.add_argument('--resume_train_backbone', action='store_true', default=False, help='train backbone')
+    parser.add_argument('--resume', action='store_true', default=False, help='train backbone')
     parser.add_argument('--test_backbone', action='store_true', default=False, help='test backbone')
     parser.add_argument('--train_model', action='store_true', default=False, help='train model')
     parser.add_argument('--test_model', action='store_true', default=False, help='test model')
     parser.add_argument('--plot_tSNE', action='store_true', default=False, help='plot tSNE')
     parser.add_argument('--tSNE_perplexity', type=int, default=30, help='tSNE perplexity')
     parser.add_argument('--visualize_data', action='store_true', default=False, help='tSNE perplexity')
-    parser.add_argument('--use_contrasive', action='store_true', default=False, help='use contrasive')
+    parser.add_argument('--use_metric', action='store_true', default=False, help='use metric learning')
     
     # backbone
-    parser.add_argument('--backbone', type=str, default='efficientnetv2_rw_t')
+    parser.add_argument('--pr_model', type=str, default='efficientnetv2_rw_t')
     parser.add_argument('--proj_method', type=str, default='linear', help='projection method')
     
     # data loader
@@ -39,17 +39,16 @@ def main():
     # model define
     
     # general
-    parser.add_argument('--dropout', type=float, default=0.4, help='dropout')
     parser.add_argument('--d_features', type=int, default=1024, help='dimension of embed features')
     parser.add_argument('--proj_features', type=int, default=128, help='dimension of projected features')
     
     # audio
-    parser.add_argument('--seg_num', type=int, default=3)
+    parser.add_argument('--seg_num', type=int, default=18)
     parser.add_argument('--clip_samples', type=int, default=16000)
     parser.add_argument('--sampling_rate', type=int, default=16000)
+    parser.add_argument('--n_mels', type=int, default=128)
     parser.add_argument('--audio_dataset', type=str, default='scv2')
     
-
     # nearest neighbour search
     parser.add_argument('--nn_method', type=str, default='faiss', help='nearest neighbour method')
     parser.add_argument('--n_neighbours', type=int, default=8, help='number of neighbours')
@@ -83,17 +82,20 @@ def main():
     
     # save and load
     parser.add_argument('--pretrained_path', type=str, default='./pretrained', help='location of pretrained checkpoints')
-    parser.add_argument('--checkpoint_path', type=str, default='./checkpoints', help='location of model checkpoints')
+    parser.add_argument('--backbone_path', type=str, default='./checkpoints/backbones', help='location of backbone')
+    parser.add_argument('--checkpoint_path', type=str, default='./checkpoints/models', help='location of model checkpoints')
     parser.add_argument('--model_save_path', type=str, default='./save', help='location of model save')
     parser.add_argument('--fig_save_path', type=str, default='./figs', help='location of fig save')
     
     # optimization
+    parser.add_argument('--dropout', type=float, default=0.4, help='dropout')
     parser.add_argument('--temperature', type=float, default=0.07, help='supervised contrast loss temp')
     parser.add_argument('--itr', type=int, default=1, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=100, help='train epochs')
-    parser.add_argument('--patience', type=int, default=30, help='early stopping patience')
-    parser.add_argument('--learning_rate', type=float, default=0.01, help='lr')
+    parser.add_argument('--patience', type=int, default=50, help='early stopping patience')
+    parser.add_argument('--learning_rate', type=float, default=0.001, help='lr')
     parser.add_argument('--lr_min', type=float, default=1e-4, help='lr')
+    parser.add_argument('--eta', type=float, default=0.1, help='eta')
     
     # GPU
     parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
@@ -113,9 +115,6 @@ def main():
 
     args.c_in, args.seq_len, args.num_classes, avg_class_examples = get_dataset_desc(args.dataset)
 
-    args.input_h = c_in
-    args.input_w = seq_len
-        
     args.setting = get_model_setting(args)
     
     if args.train_backbone or args.test_backbone:

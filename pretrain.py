@@ -1,4 +1,4 @@
-from model import ImageModel
+from model.backbones import ImageModelWarpper
 import torch
 from data import data_provider
 import numpy as np
@@ -18,40 +18,39 @@ torch.manual_seed(fix_seed)
 parser = argparse.ArgumentParser(description='God please help me')
 
 # basic config
-parser.add_argument('--model', type=str, default='efficientnetv2_rw_t')
+parser.add_argument('--pr_model', type=str, default='gc_efficientnetv2_rw_t')
 parser.add_argument('--resume', action='store_true', default=False)
 parser.add_argument('--proj_method', type=str, default="linear")
+parser.add_argument('--d_features', type=int, default=1024)
 parser.add_argument('--freqm', type=int, default=24)
 parser.add_argument('--timem', type=int, default=24)
+parser.add_argument('--n_mels', type=int, default=128)
+parser.add_argument('--nCategories', type=int, default=36)
 parser.add_argument('--learning_rate', type=float, default=0.01)
 parser.add_argument('--warmup', type=int, default=3000)
-parser.add_argument('--patience', type=int, default=30)
+parser.add_argument('--lr_min', type=float, default=1e-4)
+parser.add_argument('--checkpoint_path', type=str, default='./checkpoints')
+parser.add_argument('--patience', type=int, default=50)
 parser.add_argument('--train_epochs', type=int, default=100)
 parser.add_argument('--batch_size', type=int, default=48)
 parser.add_argument('--clip_samples', type=int, default=16000)
-parser.add_argument('--samplingrate', type=int, default=16000)
+parser.add_argument('--sampling_rate', type=int, default=16000)
 parser.add_argument('--audio_dataset', type=str, default='scv2')
 
 args = parser.parse_args()
 args.c_in, args.num_classes = 1, 35
-model_dict = {
-    'efficientnetv2_rw_t': 'ImageModel("efficientnetv2_rw_t", args)',  # 35 is the number of classes in the scv2
-    'gc_efficientnetv2_rw_t': 'ImageModel("gc_efficientnetv2_rw_t", args)',
-    'efficientnetv2_rw_s': 'ImageModel("efficientnetv2_rw_s", args)',
-    'efficientnetv2_rw_m': 'ImageModel("efficientnetv2_rw_m", args)'
-}
 
-model = eval(model_dict[args.model])
+model = ImageModelWarpper(args)
 
 _, train_loader = data_provider(args, 'train', 'audio')
 _, test_loader = data_provider(args, 'test', 'audio')
 
-optimizer = OptimWrapper(lr=args.learning_rate, warmup=args.warmup, 
-                         optimizer=optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9, weight_decay=0.01))
+optimizer = optimizer=optim.Adam(model.parameters(), lr=args.learning_rate)
+scheduler = optim.lr_scheduler.ExponentialLR(optimizer=optimizer, gamma=0.95, verbose=True)
 criterion = nn.CrossEntropyLoss(reduction='mean')
 device = torch.device('cuda:0')
 model.to(device)
-setting = f"{args.model}_ds{args.audio_dataset}"
+setting = f"{args.pr_model}_ds{args.audio_dataset}"
 
 def vali():
     model.eval()
@@ -80,7 +79,6 @@ def train():
     path = os.path.join('./pretrained/', setting)
     if not os.path.exists(path):
         os.makedirs(path)
-    if args.resume:
         best_model_path = f"{path}/checkpoint.pth"
         model.load_state_dict(torch.load(best_model_path))
         
@@ -105,11 +103,11 @@ def train():
 
             if (i+1) % 100==0:
                 print(f"\titers: {i + 1}, epoch: {epoch + 1} | loss: {'%.7f'%ave_loss}") 
-
+        scheduler.step()
         test_loss, acc = vali()
 
         print(f"Epoch: {epoch + 1}, cost time: {time.time()-epoch_time} | Test Loss: {'%.7f'%test_loss} Test acc: {'%.4f'%acc}")
-        early_stopping(acc, {args.model: model}, path)
+        early_stopping(acc, {args.pr_model: model}, path)
         if early_stopping.early_stop:
             print("Early stopping")
             break

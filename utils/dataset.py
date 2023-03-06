@@ -207,9 +207,9 @@ def get_UCR_data(dsid, path='.', parent_dir='data/UCR', on_disk=True, mode='c', 
 
     mmap_mode = mode if on_disk else None
     X_train = np.array(np.load(f'{full_tgt_dir}/X_train.npy', mmap_mode=mmap_mode))
-    y_train = np.array(np.load(f'{full_tgt_dir}/y_train.npy', mmap_mode=mmap_mode), dtype=int)
+    y_train = np.array(np.load(f'{full_tgt_dir}/y_train.npy', mmap_mode=mmap_mode), dtype=float).astype(int)
     X_valid = np.array(np.load(f'{full_tgt_dir}/X_valid.npy', mmap_mode=mmap_mode))
-    y_valid = np.array(np.load(f'{full_tgt_dir}/y_valid.npy', mmap_mode=mmap_mode), dtype=int)
+    y_valid = np.array(np.load(f'{full_tgt_dir}/y_valid.npy', mmap_mode=mmap_mode), dtype=float).astype(int)
 
     if return_split:
         if Xdtype is not None: 

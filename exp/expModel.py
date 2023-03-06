@@ -32,7 +32,7 @@ class ModelExp(Basic):
         return model
 
     def _get_data(self, flag):
-        dataset, dataloader = data_provider(self.args, flag)
+        dataset, dataloader = data_provider(self.args, flag, 'ts')
         return dataset, dataloader
 
 
@@ -48,7 +48,7 @@ class ModelExp(Basic):
 
         acc = accuracy_score(pred.numpy(), gt.numpy())
         # result save
-        folder_path = './results/' + self.setting +'/'
+        folder_path = f'./results/model/{self.setting}/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 

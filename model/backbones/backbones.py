@@ -6,15 +6,102 @@ import math
 import timm
 import os
 from collections import OrderedDict
-from .acousticUtils import MelspectrogramLayer
+from .acousticUtils import MelspectrogramLayer, Normalization2D
 import torchaudio
 from model.backbones import config as cf
+from utils.tools import MappingLayer
 
+
+class AttRNN(nn.Module):
+    
+    def __init__(self, args, unet = False):
+        super().__init__()
+        self.sr = args.sampling_rate
+        self.nCategories = 35
+        self.unet = unet
+        self.acoustic_layer = AcousticLayer(args)
+        if self.unet:
+            self.up_layer = nn.Sequential(
+                nn.Conv2d(1, 16, (5, 1), padding='same'),
+                nn.ReLU(),
+                nn.BatchNorm2d(16),
+            )
+            self.down_layer = nn.Sequential(
+                nn.Conv2d(16, 32, (5, 1), padding='same'),
+                nn.ReLU(),
+                nn.Conv2d(32, 32, (5, 1), padding='same'),
+                nn.ReLU(),
+                nn.BatchNorm2d(32),
+                nn.Conv2d(32, 16, (5, 1), padding='same'),
+                nn.ReLU(),
+                nn.BatchNorm2d(16),
+            )
+            self.merge_layer = nn.Sequential(
+                nn.Conv2d(16, 1, (5, 1), padding='same'),
+                nn.ReLU(),
+                nn.BatchNorm2d(1),
+            )
+        else:
+            self.net_layer = nn.Sequential(
+                nn.Conv2d(1, 10, (5, 1), padding='same'),
+                nn.ReLU(),
+                nn.BatchNorm2d(10),
+                nn.Conv2d(10, 1, (5, 1), padding='same'),
+                nn.ReLU(),
+                nn.BatchNorm2d(1),
+            )
+        self.bi_lstm1 = nn.LSTM(128, 64, 1, batch_first=True, bidirectional=True)
+        self.bi_lstm2 = nn.LSTM(128, 64, 1, batch_first=True, bidirectional=True)
+        self.qurey_proj = nn.Linear(128, 128)
+        self.attn_proj = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.Linear(32, self.nCategories),
+        )
+        
+
+    def forward(self, x):
+        
+        x = self.acoustic_layer(x).transpose(1, 3)
+        x = Normalization2D(int_axis=0)(x)
+
+        # note that Melspectrogram puts the sequence in shape (batch_size, frames, melDim, input_dim)
+        # we would rather have it the other way around for LSTMs
+
+        if self.unet:
+            up = self.up_layer(x.permute(0, 3, 1, 2))
+            down = self.down_layer(up)
+            merge = torch.cat((up, down), dim=-2)
+            x = self.merge_layer(merge).permute(0, 2, 3, 1)
+        else:
+            x = self.net_layer(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+
+        # x = Reshape((125, 80)) (x)
+        x = x.squeeze(-1)
+
+        x, _ = self.bi_lstm1(x)  # [b_s, seq_len, vec_dim]
+        x, _ = self.bi_lstm2(x)  # [b_s, seq_len, vec_dim]
+
+        xFirst = x[:, -1]  # [b_s, vec_dim]
+        query = self.qurey_proj(xFirst)
+
+        # dot product attention
+        attScores = torch.einsum('bv, bsv -> bs', query, x)
+        attScores = F.softmax(attScores, dim=1)  # [b_s, seq_len]
+
+        # rescale sequence
+        attVector = torch.einsum('bs, bsv -> bv', attScores, x) # [b_s, vec_dim]
+
+        out = self.attn_proj(attVector)
+
+        return out
+    
 # Adverserial Reprogramming layer
 class ARTLayer(nn.Module):
-    def __init__(self, drop_rate=0.4):
+    def __init__(self, dropout=0.4):
         super().__init__()
-        self.dropout = nn.Dropout(drop_rate)
+        self.dropout = nn.Dropout(dropout)
         self.build = False
 
     def _bulid(self, x):
@@ -66,8 +153,7 @@ class AttentionLayer(nn.Module):
 
         return self.out_projection(out)
     
-    
-class SegZeroPadding1D(nn.Module):
+class SegZeroPadding(nn.Module):
     def __init__(self, seg_num):
         super().__init__()
         self.seg_num = seg_num
@@ -85,16 +171,6 @@ class SegZeroPadding1D(nn.Module):
             seg_x = F.pad(x, (0, 0, startidx, src_xlen-endidx))
             aug_x += seg_x
         return aug_x
-
-
-class MappingLayer(nn.Module):
-    def __init__(self, d_features, num_classes):
-        super().__init__()
-        self.mapping = nn.Linear(d_features, num_classes)
-        
-    def forward(self, x):
-        out = self.mapping(x)
-        return out
     
 
 class ProjectionLayer(nn.Module):
@@ -122,14 +198,14 @@ class ProjectionLayer(nn.Module):
     def forward(self, x):
         B, C, T, F = x.shape
         if self.proj_method == 'linear':
-            out = torch.flatten(out, 2)
+            out = torch.flatten(x, 2)
             out = torch.mean(out, dim=-1)
             out = self.proj(out)
         elif self.proj_method == 'conv':
             out = torch.flatten(self.proj(x), 2)
             out = torch.mean(out, dim=-1)
         elif self.proj_method == 'attn':
-            out = out.reshape(B, -1, F)
+            out = x.reshape(B, -1, F)
             out = torch.mean(out, dim=-1)
             out = out.reshape(B, C, T).permute(0, 2, 1)
             out = self.proj(out, out, out) # [B, T, D]
@@ -141,29 +217,47 @@ class MyModel(nn.Module):
     def __init__(self, args, load=True):
         super().__init__()
         self.args = args
-        self.padding_layer = SegZeroPadding1D(args.seg_num)
-        self.ART_layer = ARTLayer(args.drop_rate)
-        self.pr_model = ImageModel(args.pr_model, args, load=False)
-        self.proj_layer = ProjectionLayer(args.proj_method, args.d_features, args.n_mels, args.pr_model)
-        self._pr_adjust()
-        self.pretrained_path = args.pretrained_path
+        self.padding_layer = SegZeroPadding(args.seg_num)
+        # self.padding_layer = InterpolatePadding()
+        self.ART_layer = ARTLayer(args.dropout)
+        if args.pr_model != 'attRNN':
+            self.pr_model = ImageModel(args, load=False)
+            self._pr_adjust()
+        else:
+            self.pr_model = AttRNN(args)
         if load:
             self._load()
         
     def _pr_adjust(self):
         self.pr_model = nn.Sequential(OrderedDict([
             ('acoustic_layer', list(self.pr_model.children())[0]),
-            ('net', list(self.pr_model.children())[1])
+            ('model', list(self.pr_model.children())[1]),
+            ('proj_layer', list(self.pr_model.children())[2]),
+            # ('classifier', nn.Linear(self.args.d_features, 35))
             ]))
+        # for p in self.pr_model.parameters():
+        #     p.requires_grad = False
         
     def _load(self):
-        load_path = os.path.join(self.args.pretrained_path, f"{self.pr_model}_ds{self.args.audio_dataset}")
+        load_path = f"{self.args.pretrained_path}/{self.args.pr_model}_ds{self.args.audio_dataset}/checkpoint.pth"
         if os.path.exists(load_path):
             pr_model_dict = torch.load(load_path)
-            if 'proj.weight' in pr_model_dict.keys() and 'proj.bias' in pr_model_dict.keys():
-                pr_model_dict.pop('proj.weight')
-                pr_model_dict.pop('proj.bias')
-            self.pr_model.load_state_dict(pr_model_dict, strict=False)
+            if 'classifier.weight' in pr_model_dict.keys() and 'classifier.bias' in pr_model_dict.keys():
+                pr_model_dict.pop('classifier.weight')
+                pr_model_dict.pop('classifier.bias')
+            input_convs = self.pr_model.model.pretrained_cfg.get('first_conv', None)
+            if isinstance(input_convs, str):
+                input_convs = (input_convs,)
+            for input_conv_name in input_convs:
+                weight_name = f"model.{input_conv_name}.weight"
+                conv_weight = pr_model_dict[weight_name]
+                O, I, J, K = conv_weight.shape
+                if self.args.c_in != 1:
+                    repeat_num = int(self.args.c_in)
+                    conv_weight = conv_weight.repeat(1, repeat_num, 1, 1)
+                    conv_weight *= (1 / float(self.args.c_in))
+                pr_model_dict[weight_name] = conv_weight
+            self.pr_model.load_state_dict(pr_model_dict, strict=True)
                             
     def forward(self, x):  
         x_aug = self.padding_layer(x)
@@ -171,10 +265,24 @@ class MyModel(nn.Module):
         x_aug = self.ART_layer(x_aug) # e.g., input_shape[0] = 500 for FordA
         
         out = self.pr_model(x_aug)   
-        
-        out = self.proj_layer(out)
 
         return out
+    
+
+class MyModelWarpper(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.model = MyModel(args, load=True)
+        if args.pr_model != 'attRNN':
+            self.classifier = nn.Linear(args.d_features, args.num_classes)
+        else:
+            self.classifier = nn.Linear(35, args.num_classes)
+        # self.classifier = RNNLayer(args.d_features, args.num_classes)
+        
+    def forward(self, x):
+        embedding = self.model(x)
+        out = self.classifier(embedding)
+        return out, embedding
     
     
 class AcousticLayer(nn.Module):
@@ -182,7 +290,7 @@ class AcousticLayer(nn.Module):
         super().__init__()
         self.args = args
         self.m = MelspectrogramLayer(n_fft=1024, hop_length=160, center=True, pad_begin=False, 
-                                     sample_rate=args.sampling_rate, n_mels=args.n_mels, pow=2.0, mel_f_min=40.0, 
+                                     sample_rate=args.sampling_rate, n_mels=args.n_mels, pow=1.0, mel_f_min=40.0, 
                                      mel_f_max=args.sampling_rate / 2, return_decibel=True)
         
     def forward(self, x):
@@ -201,10 +309,11 @@ class AcousticLayer(nn.Module):
     
 class ImageModel(nn.Module):
     
-    def __init__(self, model, args, load=True) -> None:
+    def __init__(self, args, load=True) -> None:
         super().__init__()
         self.acoustic_layer = AcousticLayer(args)
-        self.model = eval(cf.create_model[model])
+        # self.norm_layer = Normalization2D(int_axis=0)
+        self.model = eval(cf.create_model[args.pr_model])
         self.proj_layer = ProjectionLayer(args.proj_method, args.d_features, args.n_mels, args.pr_model)
         self.model.global_pool = nn.Identity()
         self.model.classifier = nn.Identity()
@@ -212,7 +321,6 @@ class ImageModel(nn.Module):
         self.build = False
         if load:
             self._load()
-        
         
     def _load(self):
         pr_model_dict = torch.load(cf.checkpoint[self.args.pr_model])
@@ -234,29 +342,29 @@ class ImageModel(nn.Module):
                     conv_weight = conv_weight.sum(dim=2, keepdim=False)
                 else:
                     conv_weight = conv_weight.sum(dim=1, keepdim=True)
-            elif self.c_in != 3:
-                repeat_num = int(math.ceil(self.c_in / 3))
+            elif self.args.c_in != 3:
+                repeat_num = int(math.ceil(self.args.c_in / 3))
                 conv_weight = conv_weight.repeat(1, repeat_num, 1, 1)[:, :in_chans, :, :]
-                conv_weight *= (3 / float(self.c_in))
+                conv_weight *= (3 / float(self.args.c_in))
             pr_model_dict[weight_name] = conv_weight
         self.model.load_state_dict(pr_model_dict)
         
     def forward(self, x):
         x = self.acoustic_layer(x)
         # x: (batch, dim, nmels, frames)
+        # x = self.norm_layer(x)
         x = self.model(x)
         out = self.proj_layer(x)
-        out = self.classifier(out)
-
         return out
     
 
 class ImageModelWarpper(nn.Module):
     def __init__(self, args):
+        super().__init__()
         self.model = ImageModel(args, load=True)
         self.classifier = nn.Linear(args.d_features, args.num_classes)
         
     def forward(self, x):
-        out = self.model(x)
-        out = self.classifier(out)
-        return out
+        embedding = self.model(x)
+        out = self.classifier(embedding)
+        return out, embedding

@@ -23,5 +23,5 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 def get_model_setting(args):
-    return f"{args.backbone}_fd{args.d_features}_ds{args.dataset}"
+    return f"{args.pr_model}_ds{args.dataset}"
 

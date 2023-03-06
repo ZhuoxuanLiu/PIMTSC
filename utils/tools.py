@@ -45,11 +45,11 @@ class EarlyStopping:
         self.acc_min = np.Inf
         self.delta = delta
 
-    def __call__(self, acc, model, path):
+    def __call__(self, acc, model):
         score = acc
         if self.best_score is None:
             self.best_score = score
-            self.save_checkpoint(acc, model, path)
+            self.save_checkpoint(acc, model)
         elif score < self.best_score + self.delta:
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
@@ -57,14 +57,14 @@ class EarlyStopping:
                 self.early_stop = True
         else:
             self.best_score = score
-            self.save_checkpoint(acc, model, path)
+            self.save_checkpoint(acc, model)
             self.counter = 0
 
-    def save_checkpoint(self, acc, model: dict, path):
+    def save_checkpoint(self, acc, model: dict):
         if self.verbose:
             print(f'accuracy increased ({self.acc_min:.6f} --> {acc:.6f}).  Saving model ...')
         for k, v in model.items():
-            torch.save(v.state_dict(), f"{path}/checkpoint.pth")
+            torch.save(k.state_dict(), f"{v}/checkpoint.pth")
         self.acc_min = acc
         
 

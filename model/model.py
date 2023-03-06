@@ -10,7 +10,6 @@ from .sampler import GreedyCoresetSampler, ApproximateGreedyCoresetSampler, Rand
 from .neighborSerach import FaissNN, ApproximateFaissNN, NearestNeighbourScorer
 from model.backbones import MyModel
 from utils.utils import dotdict
-from model.augment import load_aug
 
 
 class Model(nn.Module):
@@ -25,9 +24,8 @@ class Model(nn.Module):
         self.args = args
         self.device = device
         self.setting = setting
-        self.backbone = MyModel(args).to(self.device)
-        self.backbone_checkpoint_path = f"{args.checkpoint_path}/{setting}/g_checkpoint.pth"
-        self.backbone_name = args.backbone
+        self.backbone = MyModel(args, load=False).to(self.device)
+        self.backbone_checkpoint_path = f"{args.backbone_path}/{setting}/checkpoint.pth"
         self.update_bank_counter = {args.update_bank_interv: 0}
         self._load_backbone_params()
         
@@ -61,7 +59,7 @@ class Model(nn.Module):
         self.backbone.eval()
         batch_x = batch_x.to(self.device).float()
         with torch.no_grad():
-            _, features = self.backbone(batch_x)
+            features = self.backbone(batch_x)
         if detach:
             features = features.detach().cpu()
         return features
@@ -73,7 +71,7 @@ class Model(nn.Module):
         label_data = batch_label
         x_data = x_data.to(self.device).float()
         with torch.no_grad():
-            _, features = self.backbone(x_data)
+            features = self.backbone(x_data)
         if detach:
             features = features.detach().cpu()
         return features, label_data
